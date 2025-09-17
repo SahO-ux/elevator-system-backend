@@ -17,13 +17,78 @@ export function initSimulationService(wss) {
     ws.on("message", (msg) => {
       try {
         const data = JSON.parse(msg.toString());
-        if (data.cmd === "start") sim.start();
-        if (data.cmd === "stop") sim.stop();
-        if (data.cmd === "reset") sim.reset();
+        if (data.cmd === "start") {
+          if (sim.running) {
+            ws.send(
+              JSON.stringify({
+                type: "info",
+                message: "Simulation is already active. No action taken.",
+              })
+            );
+          } else {
+            sim.start();
+            ws.send(
+              JSON.stringify({
+                type: "info",
+                message: "Simulation is now active.",
+              })
+            );
+          }
+        }
+        if (data.cmd === "stop") {
+          if (!sim.running) {
+            ws.send(
+              JSON.stringify({
+                type: "info",
+                message: "Simulation is already inactive. No action taken.",
+              })
+            );
+          } else {
+            sim.stop();
+            ws.send(
+              JSON.stringify({
+                type: "info",
+                message: "Simulation is now inactive.",
+              })
+            );
+          }
+        }
+        if (data.cmd === "reset") {
+          sim.reset();
+          ws.send(
+            JSON.stringify({
+              type: "info",
+              message:
+                "Simulation Reset request has been processed successfully.",
+            })
+          );
+        }
         if (data.cmd === "speed") sim.setSpeed(Number(data.speed) || 1);
-        if (data.cmd === "manualRequest")
-          sim.addManualRequest(data.payload || {});
-        if (data.cmd === "scenario") sim.spawnScenario(data.name);
+
+        if (data.cmd === "scenario") {
+          if (!sim.running) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                message: "Please start the simulation first",
+              })
+            );
+          } else {
+            sim.spawnScenario(data.name);
+            const isMorningRushScenario = data.name === "morningRush";
+            if (data.name)
+              ws.send(
+                JSON.stringify({
+                  type: "info",
+                  message: `Scenario ${
+                    isMorningRushScenario ? "Morning Rush" : "Random Burst"
+                  } spawned successfully with ${
+                    isMorningRushScenario ? "50" : "100"
+                  } randomly generated requests`,
+                })
+              );
+          }
+        }
 
         // NEW: reconfig command (safe: only when stopped)
         if (data.cmd === "reconfig") {
@@ -47,7 +112,8 @@ export function initSimulationService(wss) {
               ws.send(
                 JSON.stringify({
                   type: "info",
-                  message: "Configuration applied.",
+                  message:
+                    "Configuration applied. Start the simulation to begin spawning requests.",
                 })
               );
             } catch (e) {
@@ -59,6 +125,43 @@ export function initSimulationService(wss) {
                 })
               );
             }
+          }
+        }
+
+        if (data.cmd === "manualRequest") {
+          if (!sim.running) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                message: "Please start the simulation first",
+              })
+            );
+            return;
+          }
+
+          const payload = data.payload || {};
+          const res = sim.addManualRequest(payload);
+          // respond back to the client that issued the command
+          try {
+            if (!res.ok) {
+              ws.send(
+                JSON.stringify({
+                  type: "error",
+                  message: res.message || "Failed to create request.",
+                })
+              );
+            } else {
+              ws.send(
+                JSON.stringify({
+                  type: "info",
+                  message: res.message || "Request created.",
+                })
+              );
+              // also broadcast updated snapshot to all clients immediately
+              sim.broadcast();
+            }
+          } catch (e) {
+            console.warn("Failed to send manualRequest result to client", e);
           }
         }
       } catch (e) {
@@ -89,6 +192,7 @@ const sim = {
   scheduler: null,
   requestFreq: 0, // requests per minute
   requestSpawner: null, // interval handle
+  _utilSamples: [], // { ts, totalUtilTime, servedCount } samples for sliding-window util
 
   init(config = {}) {
     this.config = { ...this.config, ...config };
@@ -158,13 +262,26 @@ const sim = {
   },
 
   metricsSnapshot() {
-    const served = this.servedRequests;
+    const now = this.clock.now();
+    const served = this.servedRequests || [];
+
+    // Average wait: pickupTime (or servedAt) - timestamp
     const avgWait = served.length
       ? served.reduce(
           (a, b) => a + ((b.pickupTime || b.servedAt) - b.timestamp),
           0
         ) / served.length
       : 0;
+
+    // Max wait among served
+    const maxWait = served.length
+      ? served.reduce(
+          (m, b) => Math.max(m, (b.pickupTime || b.servedAt) - b.timestamp),
+          0
+        )
+      : 0;
+
+    // Average travel: dropoffTime - pickupTime
     const avgTravel = served.length
       ? served.reduce(
           (a, b) =>
@@ -173,19 +290,95 @@ const sim = {
           0
         ) / served.length
       : 0;
+
+    // Max travel among served
+    const maxTravel = served.length
+      ? served.reduce(
+          (m, b) =>
+            Math.max(
+              m,
+              (b.dropoffTime || b.completedAt) - (b.pickupTime || b.servedAt)
+            ),
+          0
+        )
+      : 0;
+
+    // Cumulative utilization: fraction of sim-time carrying passengers since start
     const util = this.elevators.length
       ? this.elevators.reduce((a, e) => a + (e.utilTime || 0), 0) /
-        (this.elevators.length * (this.clock.now() || 1))
+        (this.elevators.length * (now || 1))
       : 0;
+
+    // Pending requests stats (current waits)
+    const pending = this.pendingRequests || [];
+    const pendingCount = pending.length;
+    const pendingWaits = pending.map((r) =>
+      Math.max(0, now - (r.timestamp || now))
+    );
+    const maxPendingWait = pendingWaits.length ? Math.max(...pendingWaits) : 0;
+
+    // --- Recent utilization & throughput (sliding window) ---
+    const windowMs = 60 * 1000; // 60s window
+    let recentUtil = 0;
+    let throughputPerMin = 0;
+
+    try {
+      this._utilSamples = this._utilSamples || [];
+      const samples = this._utilSamples;
+      if (samples.length >= 2) {
+        // find latest sample (last) and the earliest sample within the window
+        const latest = samples[samples.length - 1];
+        // find the oldest sample with ts >= latest.ts - windowMs (or fallback to first)
+        const windowStartTs = latest.ts - windowMs;
+        let oldestIndex = 0;
+        for (let i = samples.length - 1; i >= 0; i--) {
+          if (samples[i].ts < windowStartTs) {
+            oldestIndex = Math.min(i + 1, samples.length - 1);
+            break;
+          }
+          // if loop finishes without break, oldestIndex stays 0
+        }
+        const oldest = samples[oldestIndex];
+
+        const deltaUtil = Math.max(
+          0,
+          latest.totalUtilTime - (oldest.totalUtilTime || 0)
+        );
+        const deltaServed =
+          (latest.servedCount || 0) - (oldest.servedCount || 0);
+        const deltaTime = Math.max(1, latest.ts - oldest.ts); // ms
+
+        recentUtil =
+          this.elevators.length > 0
+            ? deltaUtil / (this.elevators.length * deltaTime)
+            : 0;
+
+        throughputPerMin = (deltaServed / deltaTime) * 60_000;
+      }
+    } catch (e) {
+      console.warn("[sim] metrics recent calc error", e);
+    }
+
     return {
       servedCount: served.length,
       avgWait,
+      maxWait,
       avgTravel,
-      utilization: util,
+      maxTravel,
+      utilization: util, // cumulative fraction
+      recentUtil, // fraction over last windowMs
+      throughputPerMin,
+      pendingCount,
+      maxPendingWait,
     };
   },
 
-  addManualRequest({ type = "external", origin = 1, destination = 2 } = {}) {
+  addManualRequest({
+    type = "external",
+    origin = 1,
+    destination = 2,
+    elevatorId = null,
+  } = {}) {
     const r = {
       id: uuidv4(),
       timestamp: this.clock.now(),
@@ -195,7 +388,42 @@ const sim = {
       basePriority: 1,
       priority: 1,
     };
+
+    // Internal request from inside an elevator: attempt to assign immediately
+    if (type === "internal" && elevatorId != null) {
+      const elev = this.elevators.find(
+        (x) => String(x.id) === String(elevatorId)
+      );
+      if (!elev) {
+        return { ok: false, message: `Elevator ${elevatorId} not found.` };
+      }
+
+      // Check capacity
+      if (elev.passengerCount >= elev.capacity) {
+        return { ok: false, message: `Elevator ${elevatorId} is full.` };
+      }
+
+      // assign to the elevator immediately and treat passenger as already onboard
+      r.assignedTo = elev.id;
+      r.pickupTime = this.clock.now(); // already onboard
+      // schedule dropoff
+      if (r.destination != null && !elev.targetFloors.includes(r.destination)) {
+        elev.targetFloors.push(r.destination);
+      }
+      elev.passengerCount = (elev.passengerCount || 0) + 1;
+
+      // push to pendingRequests so dropoff is handled later
+      this.pendingRequests.push(r);
+      return {
+        ok: true,
+        message: `Request added to elevator ${elev.id}`,
+        request: r,
+      };
+    }
+
+    // Default: push as normal (external/internal without elevatorId)
     this.pendingRequests.push(r);
+    return { ok: true, message: "Request queued", request: r };
   },
 
   /**
@@ -223,11 +451,40 @@ const sim = {
     this.requestSpawner = setInterval(() => {
       try {
         // Uniform random request: pick origin and destination distinct uniformly
-        let origin = Math.floor(Math.random() * this.config.nFloors) + 1;
-        let destination;
-        do {
-          destination = Math.floor(Math.random() * this.config.nFloors) + 1;
-        } while (destination === origin);
+
+        let origin, destination;
+
+        // Morning rush bias (09:00–09:30) — ~70% lobby->upper, ~30% uniform random
+        if (this._isMorningRushWindow()) {
+          if (Math.random() < 0.7) {
+            // 70%: lobby origin -> choose an upward destination
+            origin = this.config.lobbyFloor || 1;
+            const minDest = Math.max(origin + 1, 1);
+            const maxDest = this.config.nFloors || 2;
+            if (maxDest >= minDest) {
+              destination =
+                Math.floor(Math.random() * (maxDest - minDest + 1)) + minDest;
+            } else {
+              // fallback to any other floor (defensive)
+              do {
+                destination =
+                  Math.floor(Math.random() * this.config.nFloors) + 1;
+              } while (destination === origin);
+            }
+          } else {
+            // 30%: uniform random origin/destination
+            origin = Math.floor(Math.random() * this.config.nFloors) + 1;
+            do {
+              destination = Math.floor(Math.random() * this.config.nFloors) + 1;
+            } while (destination === origin);
+          }
+        } else {
+          // Non-rush: uniform random origin/destination
+          origin = Math.floor(Math.random() * this.config.nFloors) + 1;
+          do {
+            destination = Math.floor(Math.random() * this.config.nFloors) + 1;
+          } while (destination === origin);
+        }
 
         // push as an external manual request (will be scheduled by scheduler)
         this.addManualRequest({
@@ -314,6 +571,107 @@ const sim = {
     }
   },
 
+  // NEW spawnScenario with quirks
+  // spawnScenario(name, _count = null) {
+  //   const count =
+  //     typeof _count === "number"
+  //       ? _count
+  //       : name === "morningRush"
+  //       ? 50
+  //       : name === "randomBurst"
+  //       ? 100
+  //       : 10;
+
+  //   const pickRandomFloorExcept = (excludeFloor) => {
+  //     if (this.config.nFloors <= 1) return excludeFloor; // degenerate
+  //     let f;
+  //     do {
+  //       f = Math.floor(Math.random() * this.config.nFloors) + 1;
+  //     } while (f === excludeFloor);
+  //     return f;
+  //   };
+
+  //   // --- MORNING RUSH: preposition + staggered timestamps (Fix A + B) ---
+  //   if (name === "morningRush") {
+  //     const lobby = this.config.lobbyFloor || 1;
+
+  //     // Pre-position idle elevators toward lobby (non-destructive)
+  //     for (const e of this.elevators) {
+  //       // only reposition truly idle elevators (no pending targets)
+  //       if (!e.targetFloors || e.targetFloors.length === 0) {
+  //         e.targetFloors = e.targetFloors || [];
+  //         if (!e.targetFloors.includes(lobby)) {
+  //           e.targetFloors.push(lobby);
+  //           // Optionally you can mark a rebalance flag if you want:
+  //           // e._rebalanceTarget = lobby;
+  //         }
+  //       }
+  //     }
+
+  //     // Spawn requests with a very small sim-time stagger to avoid tie storms
+  //     for (let i = 0; i < count; i++) {
+  //       const origin = lobby;
+  //       let destination = pickRandomFloorExcept(origin);
+
+  //       if (this.config.nFloors > origin) {
+  //         // bias to upper floors a bit (try a few times)
+  //         let tries = 0;
+  //         while (destination <= origin && tries < 6) {
+  //           destination =
+  //             Math.floor(Math.random() * (this.config.nFloors - origin)) +
+  //             origin +
+  //             1;
+  //           tries++;
+  //         }
+  //       }
+
+  //       // tiny sim-time offset so requests don't appear as exact simultaneous ties
+  //       const tinyOffset = i * 10; // 10 ms spacing in sim-time
+  //       const nowTs = this.clock.now() + tinyOffset;
+
+  //       const r = {
+  //         id: uuidv4(),
+  //         timestamp: nowTs,
+  //         type: "external",
+  //         origin,
+  //         destination,
+  //         basePriority: 1,
+  //         priority: 1,
+  //       };
+
+  //       // Insert directly so timestamp is the staggered sim-time value
+  //       this.pendingRequests.push(r);
+  //     }
+
+  //     return;
+  //   }
+
+  //   // --- RANDOM BURST: use addManualRequest (keeps existing flow) ---
+  //   if (name === "randomBurst") {
+  //     for (let i = 0; i < count; i++) {
+  //       const origin = Math.floor(Math.random() * this.config.nFloors) + 1;
+  //       const destination = pickRandomFloorExcept(origin);
+
+  //       // use existing helper so timestamp is consistent with sim.clock.now()
+  //       this.addManualRequest({
+  //         type: "external",
+  //         origin,
+  //         destination,
+  //         basePriority: 1,
+  //         priority: 1,
+  //       });
+  //     }
+  //     return;
+  //   }
+
+  //   // --- generic fallback: uniform random requests (uses addManualRequest) ---
+  //   for (let i = 0; i < count; i++) {
+  //     const origin = Math.floor(Math.random() * this.config.nFloors) + 1;
+  //     const destination = pickRandomFloorExcept(origin);
+  //     this.addManualRequest({ type: "external", origin, destination });
+  //   }
+  // },
+
   _isMorningRushWindow() {
     const dayMs = 24 * 60 * 60 * 1000;
     const simDayTime = this.clock.now() % dayMs;
@@ -382,6 +740,7 @@ const sim = {
           !r.dropoffTime
         ) {
           r.dropoffTime = this.clock.now();
+          // Decrement passenger count after dropoff
           e.passengerCount = Math.max(0, e.passengerCount - 1);
           this.servedRequests.push(r);
           this.pendingRequests = this.pendingRequests.filter(
@@ -392,22 +751,6 @@ const sim = {
 
       e.targetFloors.shift();
       return;
-      // remove this target
-      // const arrivedFloor = e.currentFloor;
-      // e.targetFloors.shift();
-
-      // // If this was a rebalancer target, clear marker and set last rebalance time
-      // if (e._rebalanceTarget && e._rebalanceTarget === arrivedFloor) {
-      //   // Why: ensures elevator doesn't get immediately re-targeted to other HF
-      //   // and records when rebalance finished (for cooldown).
-      //   e._rebalanceTarget = null;
-      //   e._lastRebalanceTime = this.clock.now();
-      //   // debug
-      //   console.log(
-      //     `[rebalancer] elevator ${e.id} reached rebalance floor ${arrivedFloor}`
-      //   );
-      // }
-      // return;
     } else {
       const timePerFloor = this.config.timePerFloor; // sim-ms needed to move one floor
 
@@ -446,17 +789,42 @@ const sim = {
     for (const e of this.elevators) this._processElevatorMovement(e, simDt);
 
     try {
-      // TBD:- CLEANUP PENDING, REMOVE IF CONDs
       if (this.scheduler && typeof this.scheduler.assign === "function") {
-        this.scheduler.assign(); // Call the callback function
+        this.scheduler.assign();
       }
-      // this.scheduler.assign();
     } catch (err) {
       console.error(`Error in function _tick: ${err}`);
     }
 
+    // update utilTime per-elevator
     for (const e of this.elevators) {
       e.utilTime = (e.utilTime || 0) + (e.passengerCount > 0 ? simDt : 0);
+    }
+
+    // --- Sampling for recent utilization & throughput ---
+    try {
+      const now = this.clock.now();
+      const totalUtilTime = this.elevators.reduce(
+        (a, e) => a + (e.utilTime || 0),
+        0
+      );
+      const servedCount = this.servedRequests.length || 0;
+      // push a sample
+      this._utilSamples = this._utilSamples || [];
+      this._utilSamples.push({ ts: now, totalUtilTime, servedCount });
+
+      // prune samples older than 2 * windowMs (keep a little headroom)
+      const windowMs = 60 * 1000; // 60s sliding window
+      const pruneBefore = now - windowMs * 2;
+      while (
+        this._utilSamples.length &&
+        this._utilSamples[0].ts < pruneBefore
+      ) {
+        this._utilSamples.shift();
+      }
+    } catch (e) {
+      // non-fatal
+      console.warn("[sim] util sampling error", e);
     }
 
     this.broadcast(); // Send to FE

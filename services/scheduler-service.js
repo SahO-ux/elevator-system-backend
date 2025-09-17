@@ -46,9 +46,36 @@ export const createScheduler = (sim) => {
       }
 
       // sort descending by score (best first), tiebreaker by lower ETA
+
+      // pairs.sort((a, b) => {
+      //   // escalate requests first
+      //   if ((b.request.escalated ? 1 : 0) !== (a.request.escalated ? 1 : 0)) {
+      //     return (b.request.escalated ? 1 : 0) - (a.request.escalated ? 1 : 0);
+      //   }
+      //   if (b.score !== a.score) return b.score - a.score;
+      //   if (a.eta !== b.eta) return a.eta - b.eta;
+      //   // tie-breaker: prefer elevator with lower utilTime (less busy)
+      //   const utilA = a.elevator.utilTime || 0;
+      //   const utilB = b.elevator.utilTime || 0;
+      //   return utilA - utilB;
+      // });
+
       pairs.sort((a, b) => {
+        // 1) Prefer escalated requests (true > false)
+        const ea = a.request.escalated ? 1 : 0;
+        const eb = b.request.escalated ? 1 : 0;
+        if (ea !== eb) return eb - ea; // escalated first
+
+        // 2) Then by score (descending)
         if (b.score !== a.score) return b.score - a.score;
-        return a.eta - b.eta;
+
+        // 3) Then by ETA (ascending)
+        if (a.eta !== b.eta) return a.eta - b.eta;
+
+        // 4) Final tie-break: prefer elevator with less utilTime (less busy)
+        const utilA = a.elevator.utilTime || 0;
+        const utilB = b.elevator.utilTime || 0;
+        return utilA - utilB;
       });
 
       // greedy: pick best pair, assign, remove elevator and request from consideration, repeat
@@ -71,8 +98,11 @@ export const createScheduler = (sim) => {
           p.elevator.targetFloors.push(p.request.destination);
         p.elevator.targetFloors = Array.from(new Set(p.elevator.targetFloors));
 
-        // optional debug:
+        // debug:
         // console.log(`[scheduler] assigned request ${p.request.id} to elevator ${p.elevator.id} (score ${p.score.toFixed(2)})`);
+        // console.log(
+        //   `[assign] escalated req ${p.request.id} -> elev ${p.elevator.id}`
+        // );
 
         usedElevatorIds.add(p.elevator.id);
         usedRequestIds.add(p.request.id);
@@ -83,6 +113,10 @@ export const createScheduler = (sim) => {
     for (const e of busyElevators) {
       for (const r of sim.pendingRequests) {
         if (r.assignedTo) continue;
+
+        // Skip if elevator is full (Redundant Guard)
+        if (e.passengerCount >= e.capacity) continue;
+
         const dir = e.direction;
         if (!dir) continue;
         const pickup = r.origin != null ? r.origin : r.destination;
