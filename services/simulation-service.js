@@ -429,7 +429,7 @@ const sim = {
   /**
    * Set request spawn frequency (requests per minute).
    * Spawns uniformly-random external requests while the sim is running.
-   * NOTE: morning-rush is NOT applied here — use the "Morning Rush" scenario/button instead.
+   * NOTE: This is not used currently and is commented out in frontend too.
    */
   setRequestFrequency(freqPerMinute = 0) {
     // store setting
