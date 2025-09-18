@@ -714,21 +714,64 @@ const sim = {
       e.doorState = "open";
       e.statusSince = this.clock.now();
 
+      // for (const r of this.pendingRequests.slice()) {
+      //   if (
+      //     r.assignedTo === e.id &&
+      //     r.origin === e.currentFloor &&
+      //     !r.pickupTime
+      //   ) {
+      //     r.pickupTime = this.clock.now();
+      //     e.passengerCount += 1;
+
+        //   // Ensure the dropoff destination is scheduled (in case assignment timing missed it)
+        //   if (
+        //     r.destination != null &&
+        //     !e.targetFloors.includes(r.destination)
+        //   ) {
+        //     e.targetFloors.push(r.destination);
+        //   }
+        // }
+
+      //   // DROPOFF: passenger leaving
+      //   if (
+      //     r.assignedTo === e.id &&
+      //     r.destination === e.currentFloor &&
+      //     r.pickupTime &&
+      //     !r.dropoffTime
+      //   ) {
+      //     r.dropoffTime = this.clock.now();
+      //     // Decrement passenger count after dropoff
+      //     e.passengerCount = Math.max(0, e.passengerCount - 1);
+      //     this.servedRequests.push(r);
+      //     this.pendingRequests = this.pendingRequests.filter(
+      //       (x) => x.id !== r.id
+      //     );
+      //   }
+      // }
+
       for (const r of this.pendingRequests.slice()) {
+        // PICKUP: assigned to this elevator and waiting to be picked up at this floor
         if (
           r.assignedTo === e.id &&
           r.origin === e.currentFloor &&
           !r.pickupTime
         ) {
-          r.pickupTime = this.clock.now();
-          e.passengerCount += 1;
+          // If there's space, board passenger. Otherwise unassign so scheduler can reassign.
+          if ((e.passengerCount || 0) < e.capacity) {
+            r.pickupTime = this.clock.now();
+            e.passengerCount += 1;
 
-          // Ensure the dropoff destination is scheduled (in case assignment timing missed it)
-          if (
-            r.destination != null &&
-            !e.targetFloors.includes(r.destination)
-          ) {
-            e.targetFloors.push(r.destination);
+            // Ensure dropoff is scheduled (in case assignment missed it)
+            if (
+              r.destination != null &&
+              !e.targetFloors.includes(r.destination)
+            ) {
+              e.targetFloors.push(r.destination);
+            }
+          } else {
+            // no space: unassign this request so it will be available for other elevators
+            r.assignedTo = null;
+            // r.priority = Math.max(1, (r.priority || 1) - 0.05);
           }
         }
 
@@ -743,6 +786,7 @@ const sim = {
           // Decrement passenger count after dropoff
           e.passengerCount = Math.max(0, e.passengerCount - 1);
           this.servedRequests.push(r);
+          // remove from pending - safe to mutate here since we're iterating over a slice
           this.pendingRequests = this.pendingRequests.filter(
             (x) => x.id !== r.id
           );

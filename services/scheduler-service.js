@@ -90,6 +90,19 @@ export const createScheduler = (sim) => {
           continue;
         if (p.elevator.passengerCount >= p.elevator.capacity) continue;
 
+        // compute projected load: passengers onboard + pending pickups already assigned to this elevator
+        const alreadyAssignedPending = sim.pendingRequests.filter(
+          (x) => x.assignedTo === p.elevator.id && !x.pickupTime
+        ).length;
+
+        const projectedLoad =
+          (p.elevator.passengerCount || 0) + alreadyAssignedPending;
+
+        // skip if projectedLoad >= capacity (do not over-assign)
+        if (projectedLoad >= p.elevator.capacity) {
+          continue;
+        }
+
         // assign
         p.request.assignedTo = p.elevator.id;
         if (p.request.origin != null)
