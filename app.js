@@ -1,6 +1,10 @@
 import controlController from "./controllers/control-controller.js";
 import requestController from "./controllers/request-controller.js";
 
+// Routes specified for debugging / testing purposes
+// Currently only metrics api is used by frontend for getting
+// periodical simulation metrics data
+
 export default function createApp(app, simService) {
   app.post("/api/control/start", (req, res) =>
     controlController.start(req, res, simService)

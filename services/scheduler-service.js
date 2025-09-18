@@ -1,10 +1,8 @@
 import {
   updatePriorities,
-  // findBestForElevator,
   computeScore,
 } from "./constants.js";
 
-// Scheduler service (plain JS)
 // Hybrid approach: directional batching (SCAN-like) + nearest-car scoring + escalation
 
 export const createScheduler = (sim) => {
@@ -14,7 +12,6 @@ export const createScheduler = (sim) => {
   // Assigns pending requests to elevators based on their state and request properties
   // Uses a greedy global matching approach: evaluates all (idleElevator, pendingRequest) pairs, picks best repeatedly
   // Also does intra-trip batching for busy elevators (same as before)
-  // Finally, does rebalancing of idle elevators to high-traffic floors if configured
 
   const assign = () => {
     const now = sim.clock.now();
@@ -44,21 +41,6 @@ export const createScheduler = (sim) => {
           pairs.push({ elevator: e, request: r, score, eta });
         }
       }
-
-      // sort descending by score (best first), tiebreaker by lower ETA
-
-      // pairs.sort((a, b) => {
-      //   // escalate requests first
-      //   if ((b.request.escalated ? 1 : 0) !== (a.request.escalated ? 1 : 0)) {
-      //     return (b.request.escalated ? 1 : 0) - (a.request.escalated ? 1 : 0);
-      //   }
-      //   if (b.score !== a.score) return b.score - a.score;
-      //   if (a.eta !== b.eta) return a.eta - b.eta;
-      //   // tie-breaker: prefer elevator with lower utilTime (less busy)
-      //   const utilA = a.elevator.utilTime || 0;
-      //   const utilB = b.elevator.utilTime || 0;
-      //   return utilA - utilB;
-      // });
 
       pairs.sort((a, b) => {
         // 1) Prefer escalated requests (true > false)

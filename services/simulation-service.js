@@ -1,7 +1,8 @@
+import { v4 as uuidv4 } from "uuid";
+
 import { createSimClock } from "../lib/sim-clock.js";
 import { createElevator } from "../models/elevator-model.js";
 import { createScheduler } from "./scheduler-service.js";
-import { v4 as uuidv4 } from "uuid";
 
 let _wss = null;
 
@@ -572,107 +573,6 @@ const sim = {
     }
   },
 
-  // NEW spawnScenario with quirks
-  // spawnScenario(name, _count = null) {
-  //   const count =
-  //     typeof _count === "number"
-  //       ? _count
-  //       : name === "morningRush"
-  //       ? 50
-  //       : name === "randomBurst"
-  //       ? 100
-  //       : 10;
-
-  //   const pickRandomFloorExcept = (excludeFloor) => {
-  //     if (this.config.nFloors <= 1) return excludeFloor; // degenerate
-  //     let f;
-  //     do {
-  //       f = Math.floor(Math.random() * this.config.nFloors) + 1;
-  //     } while (f === excludeFloor);
-  //     return f;
-  //   };
-
-  //   // --- MORNING RUSH: preposition + staggered timestamps (Fix A + B) ---
-  //   if (name === "morningRush") {
-  //     const lobby = this.config.lobbyFloor || 1;
-
-  //     // Pre-position idle elevators toward lobby (non-destructive)
-  //     for (const e of this.elevators) {
-  //       // only reposition truly idle elevators (no pending targets)
-  //       if (!e.targetFloors || e.targetFloors.length === 0) {
-  //         e.targetFloors = e.targetFloors || [];
-  //         if (!e.targetFloors.includes(lobby)) {
-  //           e.targetFloors.push(lobby);
-  //           // Optionally you can mark a rebalance flag if you want:
-  //           // e._rebalanceTarget = lobby;
-  //         }
-  //       }
-  //     }
-
-  //     // Spawn requests with a very small sim-time stagger to avoid tie storms
-  //     for (let i = 0; i < count; i++) {
-  //       const origin = lobby;
-  //       let destination = pickRandomFloorExcept(origin);
-
-  //       if (this.config.nFloors > origin) {
-  //         // bias to upper floors a bit (try a few times)
-  //         let tries = 0;
-  //         while (destination <= origin && tries < 6) {
-  //           destination =
-  //             Math.floor(Math.random() * (this.config.nFloors - origin)) +
-  //             origin +
-  //             1;
-  //           tries++;
-  //         }
-  //       }
-
-  //       // tiny sim-time offset so requests don't appear as exact simultaneous ties
-  //       const tinyOffset = i * 10; // 10 ms spacing in sim-time
-  //       const nowTs = this.clock.now() + tinyOffset;
-
-  //       const r = {
-  //         id: uuidv4(),
-  //         timestamp: nowTs,
-  //         type: "external",
-  //         origin,
-  //         destination,
-  //         basePriority: 1,
-  //         priority: 1,
-  //       };
-
-  //       // Insert directly so timestamp is the staggered sim-time value
-  //       this.pendingRequests.push(r);
-  //     }
-
-  //     return;
-  //   }
-
-  //   // --- RANDOM BURST: use addManualRequest (keeps existing flow) ---
-  //   if (name === "randomBurst") {
-  //     for (let i = 0; i < count; i++) {
-  //       const origin = Math.floor(Math.random() * this.config.nFloors) + 1;
-  //       const destination = pickRandomFloorExcept(origin);
-
-  //       // use existing helper so timestamp is consistent with sim.clock.now()
-  //       this.addManualRequest({
-  //         type: "external",
-  //         origin,
-  //         destination,
-  //         basePriority: 1,
-  //         priority: 1,
-  //       });
-  //     }
-  //     return;
-  //   }
-
-  //   // --- generic fallback: uniform random requests (uses addManualRequest) ---
-  //   for (let i = 0; i < count; i++) {
-  //     const origin = Math.floor(Math.random() * this.config.nFloors) + 1;
-  //     const destination = pickRandomFloorExcept(origin);
-  //     this.addManualRequest({ type: "external", origin, destination });
-  //   }
-  // },
-
   _isMorningRushWindow() {
     const dayMs = 24 * 60 * 60 * 1000;
     const simDayTime = this.clock.now() % dayMs;
@@ -714,41 +614,6 @@ const sim = {
     if (e.currentFloor === target) {
       e.doorState = "open";
       e.statusSince = this.clock.now();
-
-      // for (const r of this.pendingRequests.slice()) {
-      //   if (
-      //     r.assignedTo === e.id &&
-      //     r.origin === e.currentFloor &&
-      //     !r.pickupTime
-      //   ) {
-      //     r.pickupTime = this.clock.now();
-      //     e.passengerCount += 1;
-
-      //   // Ensure the dropoff destination is scheduled (in case assignment timing missed it)
-      //   if (
-      //     r.destination != null &&
-      //     !e.targetFloors.includes(r.destination)
-      //   ) {
-      //     e.targetFloors.push(r.destination);
-      //   }
-      // }
-
-      //   // DROPOFF: passenger leaving
-      //   if (
-      //     r.assignedTo === e.id &&
-      //     r.destination === e.currentFloor &&
-      //     r.pickupTime &&
-      //     !r.dropoffTime
-      //   ) {
-      //     r.dropoffTime = this.clock.now();
-      //     // Decrement passenger count after dropoff
-      //     e.passengerCount = Math.max(0, e.passengerCount - 1);
-      //     this.servedRequests.push(r);
-      //     this.pendingRequests = this.pendingRequests.filter(
-      //       (x) => x.id !== r.id
-      //     );
-      //   }
-      // }
 
       for (const r of this.pendingRequests.slice()) {
         // PICKUP: assigned to this elevator and waiting to be picked up at this floor
@@ -819,7 +684,6 @@ const sim = {
         // ADDED if reached target early, break
         if (e.currentFloor === target) break;
       }
-      //ADDED 2 line below
       // subtract consumed time from accumulator
       e._accTime = e._accTime % timePerFloor; // keep only leftover < timePerFloor
 
