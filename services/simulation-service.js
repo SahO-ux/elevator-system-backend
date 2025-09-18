@@ -258,6 +258,7 @@ const sim = {
       time: this.clock.now(),
       elevators: this.elevators.map((e) => ({ ...e })),
       pendingRequests: this.pendingRequests.map((r) => ({ ...r })),
+      running: this.running,
     };
   },
 
@@ -723,14 +724,14 @@ const sim = {
       //     r.pickupTime = this.clock.now();
       //     e.passengerCount += 1;
 
-        //   // Ensure the dropoff destination is scheduled (in case assignment timing missed it)
-        //   if (
-        //     r.destination != null &&
-        //     !e.targetFloors.includes(r.destination)
-        //   ) {
-        //     e.targetFloors.push(r.destination);
-        //   }
-        // }
+      //   // Ensure the dropoff destination is scheduled (in case assignment timing missed it)
+      //   if (
+      //     r.destination != null &&
+      //     !e.targetFloors.includes(r.destination)
+      //   ) {
+      //     e.targetFloors.push(r.destination);
+      //   }
+      // }
 
       //   // DROPOFF: passenger leaving
       //   if (
