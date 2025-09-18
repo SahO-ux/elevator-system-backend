@@ -48,7 +48,7 @@ export function initSimulationService(wss) {
             sim.stop();
             ws.send(
               JSON.stringify({
-                type: "info",
+                type: "simStop",
                 message: "Simulation is now inactive.",
               })
             );
