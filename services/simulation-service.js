@@ -380,6 +380,7 @@ const sim = {
     origin = 1,
     destination = 2,
     elevatorId = null,
+    isMorningRush = false,
   } = {}) {
     const r = {
       id: uuidv4(),
@@ -389,6 +390,7 @@ const sim = {
       destination,
       basePriority: 1,
       priority: 1,
+      ...(isMorningRush ? { isMorningRush: true } : {}), // custom flag for lobby-bias
     };
 
     // Internal request from inside an elevator: attempt to assign immediately
@@ -501,6 +503,79 @@ const sim = {
     }, intervalMs);
   },
 
+  // ---- All Morning Rush requests will be generated from lobby floor-------
+  // spawnScenario(name, _count = null) {
+  //   const count =
+  //     typeof _count === "number"
+  //       ? _count
+  //       : name === "morningRush"
+  //       ? 50
+  //       : name === "randomBurst"
+  //       ? 100
+  //       : 10;
+
+  //   const pickRandomFloorExcept = (excludeFloor) => {
+  //     if (this.config.nFloors <= 1) return excludeFloor; // degenerate
+  //     let f;
+  //     do {
+  //       f = Math.floor(Math.random() * this.config.nFloors) + 1;
+  //     } while (f === excludeFloor);
+  //     return f;
+  //   };
+
+  //   if (name === "morningRush") {
+  //     // Morning Rush: majority from lobby to upper floors.
+  //     for (let i = 0; i < count; i++) {
+  //       // For clarity: choose destination uniformly among floors != lobbyFloor,
+  //       // but prefer upper floors if possible by retrying until destination > lobbyFloor.
+  //       const origin = this.config.lobbyFloor || 1;
+  //       let destination = pickRandomFloorExcept(origin);
+
+  //       // If building has floors above the lobby, bias to upper floors (try up to a few times)
+  //       if (this.config.nFloors > origin) {
+  //         let tries = 0;
+  //         while (destination <= origin && tries < 6) {
+  //           destination =
+  //             Math.floor(Math.random() * (this.config.nFloors - origin)) +
+  //             origin +
+  //             1;
+  //           tries++;
+  //         }
+  //         // fallback already guaranteed to be != origin
+  //       }
+
+  //       // Use addManualRequest to ensure consistent id/timestamp/defaults
+  //       this.addManualRequest({
+  //         type: "external",
+  //         origin,
+  //         destination,
+  //         basePriority: 1,
+  //         priority: 1,
+  //       });
+  //     }
+  //   } else if (name === "randomBurst") {
+  //     for (let i = 0; i < count; i++) {
+  //       const origin = Math.floor(Math.random() * this.config.nFloors) + 1;
+  //       const destination = pickRandomFloorExcept(origin);
+
+  //       this.addManualRequest({
+  //         type: "external",
+  //         origin,
+  //         destination,
+  //         basePriority: 1,
+  //         priority: 1,
+  //       });
+  //     }
+  //   } else {
+  //     // generic named scenario fallback: spawn `count` uniformly random requests
+  //     for (let i = 0; i < count; i++) {
+  //       const origin = Math.floor(Math.random() * this.config.nFloors) + 1;
+  //       const destination = pickRandomFloorExcept(origin);
+  //       this.addManualRequest({ type: "external", origin, destination });
+  //     }
+  //   }
+  // },
+
   spawnScenario(name, _count = null) {
     const count =
       typeof _count === "number"
@@ -511,6 +586,7 @@ const sim = {
         ? 100
         : 10;
 
+    // helper to pick a destination != origin
     const pickRandomFloorExcept = (excludeFloor) => {
       if (this.config.nFloors <= 1) return excludeFloor; // degenerate
       let f;
@@ -521,27 +597,35 @@ const sim = {
     };
 
     if (name === "morningRush") {
-      // Morning Rush: majority from lobby to upper floors.
-      for (let i = 0; i < count; i++) {
-        // For clarity: choose destination uniformly among floors != lobbyFloor,
-        // but prefer upper floors if possible by retrying until destination > lobbyFloor.
+      const lobbyRatio = 0.7;
+      const numLobby = Math.round(count * lobbyRatio);
+      const numOthers = count - numLobby;
+
+      // generate exact number of lobby-biased requests
+      for (let i = 0; i < numLobby; i++) {
         const origin = this.config.lobbyFloor || 1;
-        let destination = pickRandomFloorExcept(origin);
+        // upward preference
+        const minDest = Math.max(origin + 1, 1);
+        const maxDest = this.config.nFloors || 2;
+        const destination =
+          maxDest >= minDest
+            ? Math.floor(Math.random() * (maxDest - minDest + 1)) + minDest
+            : pickRandomFloorExcept(origin);
 
-        // If building has floors above the lobby, bias to upper floors (try up to a few times)
-        if (this.config.nFloors > origin) {
-          let tries = 0;
-          while (destination <= origin && tries < 6) {
-            destination =
-              Math.floor(Math.random() * (this.config.nFloors - origin)) +
-              origin +
-              1;
-            tries++;
-          }
-          // fallback already guaranteed to be != origin
-        }
+        this.addManualRequest({
+          type: "external",
+          origin,
+          destination,
+          basePriority: 1,
+          priority: 1,
+          isMorningRush: true,
+        });
+      }
 
-        // Use addManualRequest to ensure consistent id/timestamp/defaults
+      // generate remaining uniformly-random requests
+      for (let i = 0; i < numOthers; i++) {
+        const origin = Math.floor(Math.random() * this.config.nFloors) + 1;
+        const destination = pickRandomFloorExcept(origin);
         this.addManualRequest({
           type: "external",
           origin,
