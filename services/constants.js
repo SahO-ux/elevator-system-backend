@@ -138,7 +138,7 @@ const updatePriorities = (now, sim) => {
     if (
       sim.config.lobbyFloor &&
       r.origin === sim.config.lobbyFloor &&
-      sim._isMorningRushWindow()
+      (sim._isMorningRushWindow() || r.isMorningRush)
     ) {
       r.priority += r.priority * 0.5; // 50% boost for lobby in morning window
     }
