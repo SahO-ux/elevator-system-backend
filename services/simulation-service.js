@@ -224,8 +224,8 @@ const sim = {
     if (!this.scheduler) this.init();
 
     this.running = true;
-    const tickRate = 200;
-    this.tickIntervalHandle = setInterval(() => this._tick(200), tickRate); // rate limiting
+    const tickRate = process.env.NODE_ENV === "PRODUCTION" ? 1000 : 200;
+    this.tickIntervalHandle = setInterval(() => this._tick(tickRate), tickRate); // rate limiting
 
     // start spawner if freq set
     if (this.requestFreq > 0) {
