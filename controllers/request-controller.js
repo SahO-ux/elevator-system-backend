@@ -1,10 +1,4 @@
 const addRequest = (req, res, sim) => {
-  const body = req.body || {};
-  sim.addManualRequest(body);
-  res.json({ ok: true });
-};
-
-const addRequest = (req, res, sim) => {
   try {
     const body = req.body || {};
 
