@@ -290,7 +290,7 @@ const pickRandomFloorExcept = (
   if (floors <= 1) return excludeFloor; // degenerate
   let f;
   do {
-    f = Math.floor(Math.random() * this.config.nFloors) + 1;
+    f = Math.floor(Math.random() * floors) + 1;
   } while (f === excludeFloor);
   return f;
 };
