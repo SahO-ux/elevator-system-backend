@@ -3,7 +3,12 @@ import { v4 as uuidv4 } from "uuid";
 import { createSimClock } from "../lib/sim-clock.js";
 import { createElevator } from "../models/elevator-model.js";
 import { createScheduler } from "./scheduler-service.js";
-import { createHandlers, MSG, safeSend } from "./constants.js";
+import {
+  createHandlers,
+  DefaultAppConfig,
+  MSG,
+  safeSend,
+} from "./constants.js";
 
 let _wss = null;
 
@@ -42,18 +47,9 @@ export function initSimulationService(wss) {
   });
 }
 
-const defaultConfig = {
-  nElevators: 3,
-  nFloors: 12,
-  // highTrafficFloors: [3, 6],
-  timePerFloor: 1000,
-  doorDwell: 2000,
-  lobbyFloor: 1,
-};
-
 const sim = {
   clock: createSimClock(),
-  config: { ...defaultConfig },
+  config: { ...DefaultAppConfig },
   elevators: [],
   pendingRequests: [],
   servedRequests: [],

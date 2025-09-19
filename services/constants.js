@@ -7,6 +7,15 @@ const OCCUPANCY_PENALTY_NEAR = 200; // penalty if near capacity
 const OCCUPANCY_PENALTY_FULL = 10000; // huge penalty if full
 const FAIRNESS_WEIGHT = 0.00008; // penalize elevator with high utilTime slightly
 
+const DefaultAppConfig = {
+  nElevators: 3,
+  nFloors: 12,
+  // highTrafficFloors: [3, 6],
+  timePerFloor: 1000,
+  doorDwell: 2000,
+  lobbyFloor: 1,
+};
+
 const occupancyPenalty = (elevator) => {
   if (elevator.passengerCount >= elevator.capacity)
     return OCCUPANCY_PENALTY_FULL;
@@ -274,6 +283,7 @@ const createHandlers = ({ sim }) => {
 };
 
 export {
+  DefaultAppConfig,
   updatePriorities,
   computeScore,
   estimateETA,
