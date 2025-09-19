@@ -145,4 +145,140 @@ const updatePriorities = (now, sim) => {
   }
 };
 
-export { updatePriorities, computeScore, estimateETA };
+// Send WebSocket message safely (catch errors)
+const safeSend = (ws, payload) => {
+  try {
+    ws.send(JSON.stringify(payload));
+  } catch (e) {
+    // non-fatal send errors
+    console.warn("safeSend failed:", e);
+  }
+};
+
+// Message templates for WebSocket communication
+const MSG = {
+  SNAPSHOT: (snapshot) => ({ type: "snapshot", data: snapshot }),
+
+  INFO: (message) => ({ type: "info", message }),
+  ERROR: (message) => ({ type: "error", message }),
+  SIM_STOP: (message = "Simulation is now inactive.") => ({
+    type: "simStop",
+    message,
+  }),
+
+  REQUEST_CREATED: (message = "Request created.") => ({
+    type: "info",
+    message,
+  }),
+  REQUEST_FAILED: (message = "Failed to create request.") => ({
+    type: "error",
+    message,
+  }),
+
+  ALREADY_ACTIVE: "Simulation is already active. No action taken.",
+  ALREADY_INACTIVE: "Simulation is already inactive. No action taken.",
+  STARTED: "Simulation is now active.",
+  RESET_SUCCESS: "Simulation Reset request has been processed successfully.",
+  RECONFIG_STOP_FIRST: "Stop the simulation before applying configuration.",
+  RECONFIG_SUCCESS:
+    "Configuration applied. Start the simulation to begin spawning requests.",
+};
+
+const scenarioMessage = (name) => {
+  const isMorningRush = name === "morningRush";
+  const title = isMorningRush ? "Morning Rush" : "Random Burst";
+  const count = isMorningRush ? 35 : 100;
+  const extra = isMorningRush
+    ? " at lobby floor (Ground Floor) and 15 from other floors"
+    : "";
+  return `Scenario ${title} spawned successfully with ${count} randomly generated requests${extra}.`;
+};
+
+// App actions via WebSocket
+// Expects: createHandlers(sim)
+const createHandlers = ({ sim }) => {
+  return {
+    start: (_, ws) => {
+      if (sim.running) {
+        return safeSend(ws, MSG.INFO(MSG.ALREADY_ACTIVE));
+      }
+      sim.start();
+      safeSend(ws, MSG.INFO(MSG.STARTED));
+    },
+
+    stop: (_, ws) => {
+      if (!sim.running) {
+        return safeSend(ws, MSG.INFO(MSG.ALREADY_INACTIVE));
+      }
+      sim.stop();
+      safeSend(ws, MSG.SIM_STOP());
+    },
+
+    reset: (_, ws) => {
+      sim.reset();
+      safeSend(ws, MSG.INFO(MSG.RESET_SUCCESS));
+    },
+
+    speed: (data, _) => {
+      sim.setSpeed(Number(data.speed) || 1);
+    },
+
+    scenario: (data, ws) => {
+      if (!sim.running) {
+        return safeSend(ws, MSG.ERROR("Please start the simulation first"));
+      }
+      sim.spawnScenario(data.name);
+      safeSend(ws, MSG.INFO(scenarioMessage(data.name)));
+    },
+
+    reconfig: (data, ws) => {
+      const cfg = data.config || {};
+      if (sim.running) {
+        return safeSend(ws, MSG.ERROR(MSG.RECONFIG_STOP_FIRST));
+      }
+
+      try {
+        sim.init(cfg);
+        if (cfg.requestFreq > 0) sim.setRequestFrequency(cfg.requestFreq);
+        sim.broadcast();
+        safeSend(ws, MSG.INFO(MSG.RECONFIG_SUCCESS));
+      } catch (e) {
+        console.error("Reconfig error:", e);
+        safeSend(
+          ws,
+          MSG.ERROR("Failed to apply configuration: " + (e.message || e))
+        );
+      }
+    },
+
+    manualRequest: (data, ws) => {
+      if (!sim.running) {
+        return safeSend(ws, MSG.ERROR("Please start the simulation first"));
+      }
+
+      const payload = data.payload || {};
+      const res = sim.addManualRequest(payload);
+
+      try {
+        if (!res.ok) {
+          safeSend(ws, MSG.REQUEST_FAILED(res.message));
+        } else {
+          safeSend(ws, MSG.REQUEST_CREATED(res.message));
+          sim.broadcast();
+        }
+      } catch (e) {
+        console.warn("Failed to send manualRequest result to client", e);
+      }
+    },
+  };
+};
+
+export {
+  updatePriorities,
+  computeScore,
+  estimateETA,
+  MSG,
+  scenarioMessage,
+  safeSend,
+  createHandlers,
+};

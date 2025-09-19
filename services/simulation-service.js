@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { createSimClock } from "../lib/sim-clock.js";
 import { createElevator } from "../models/elevator-model.js";
 import { createScheduler } from "./scheduler-service.js";
+import { createHandlers, MSG, safeSend } from "./constants.js";
 
 let _wss = null;
 
@@ -10,167 +11,32 @@ export function initSimulationService(wss) {
   _wss = wss;
 
   wss.on("connection", (ws) => {
-    // send initial snapshot to newly connected client (non-fatal)
-    try {
-      ws.send(JSON.stringify({ type: "snapshot", data: sim.snapshot() }));
-    } catch (e) {}
+    // send initial snapshot (non-fatal)
+    safeSend(ws, MSG.SNAPSHOT(sim.snapshot()));
 
-    ws.on("message", (msg) => {
+    ws.on("message", (raw) => {
+      let data;
       try {
-        const data = JSON.parse(msg.toString());
-        if (data.cmd === "start") {
-          if (sim.running) {
-            ws.send(
-              JSON.stringify({
-                type: "info",
-                message: "Simulation is already active. No action taken.",
-              })
-            );
-          } else {
-            sim.start();
-            ws.send(
-              JSON.stringify({
-                type: "info",
-                message: "Simulation is now active.",
-              })
-            );
-          }
-        }
-        if (data.cmd === "stop") {
-          if (!sim.running) {
-            ws.send(
-              JSON.stringify({
-                type: "info",
-                message: "Simulation is already inactive. No action taken.",
-              })
-            );
-          } else {
-            sim.stop();
-            ws.send(
-              JSON.stringify({
-                type: "simStop",
-                message: "Simulation is now inactive.",
-              })
-            );
-          }
-        }
-        if (data.cmd === "reset") {
-          sim.reset();
-          ws.send(
-            JSON.stringify({
-              type: "info",
-              message:
-                "Simulation Reset request has been processed successfully.",
-            })
-          );
-        }
-        if (data.cmd === "speed") sim.setSpeed(Number(data.speed) || 1);
+        data = JSON.parse(raw.toString());
+      } catch (e) {
+        console.error("invalid json from client", e);
+        safeSend(ws, MSG.ERROR("Invalid JSON payload"));
+        return;
+      }
 
-        if (data.cmd === "scenario") {
-          if (!sim.running) {
-            ws.send(
-              JSON.stringify({
-                type: "error",
-                message: "Please start the simulation first",
-              })
-            );
-          } else {
-            sim.spawnScenario(data.name);
-            const isMorningRushScenario = data.name === "morningRush";
-            if (data.name)
-              ws.send(
-                JSON.stringify({
-                  type: "info",
-                  message: `Scenario ${
-                    isMorningRushScenario ? "Morning Rush" : "Random Burst"
-                  } spawned successfully with ${
-                    isMorningRushScenario ? "35" : "100"
-                  } randomly generated requests${
-                    isMorningRushScenario
-                      ? " at lobby floor (Ground Floor) and 15 from other floors"
-                      : ""
-                  }.`,
-                })
-              );
-          }
-        }
+      const handlers = createHandlers({ sim });
 
-        // NEW: reconfig command (safe: only when stopped)
-        if (data.cmd === "reconfig") {
-          const cfg = data.config || {};
-          if (sim.running) {
-            // can't reconfigure while running — reply to client
-            ws.send(
-              JSON.stringify({
-                type: "error",
-                message: "Stop the simulation before applying configuration.",
-              })
-            );
-          } else {
-            try {
-              // apply config and re-init simulation state with new values
-              sim.init(cfg);
-              if (cfg.requestFreq > 0) {
-                sim.setRequestFrequency(cfg.requestFreq);
-              }
-              sim.broadcast();
-              ws.send(
-                JSON.stringify({
-                  type: "info",
-                  message:
-                    "Configuration applied. Start the simulation to begin spawning requests.",
-                })
-              );
-            } catch (e) {
-              console.error("Reconfig error:", e);
-              ws.send(
-                JSON.stringify({
-                  type: "error",
-                  message: "Failed to apply configuration: " + (e.message || e),
-                })
-              );
-            }
-          }
-        }
-
-        if (data.cmd === "manualRequest") {
-          if (!sim.running) {
-            ws.send(
-              JSON.stringify({
-                type: "error",
-                message: "Please start the simulation first",
-              })
-            );
-            return;
-          }
-
-          const payload = data.payload || {};
-          const res = sim.addManualRequest(payload);
-          // respond back to the client that issued the command
-          try {
-            if (!res.ok) {
-              ws.send(
-                JSON.stringify({
-                  type: "error",
-                  message: res.message || "Failed to create request.",
-                })
-              );
-            } else {
-              ws.send(
-                JSON.stringify({
-                  type: "info",
-                  message: res.message || "Request created.",
-                })
-              );
-              // also broadcast updated snapshot to all clients immediately
-              sim.broadcast();
-            }
-          } catch (e) {
-            console.warn("Failed to send manualRequest result to client", e);
-          }
+      try {
+        const cmd = (data.cmd || "").toString();
+        const handler = handlers[cmd];
+        if (typeof handler === "function") {
+          handler(data, ws);
+        } else {
+          safeSend(ws, MSG.ERROR("Unknown command: " + cmd));
         }
       } catch (e) {
-        console.error(`Error in function initSimulationService: ${e}`);
+        console.error("Error handling message in initSimulationService:", e);
+        safeSend(ws, MSG.ERROR("Internal server error"));
       }
     });
   });
@@ -839,7 +705,4 @@ const sim = {
   },
 };
 
-export function getSimulationService() {
-  return sim;
-}
-export default sim;
+export const getSimulationService = () => sim;
