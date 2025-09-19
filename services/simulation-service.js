@@ -58,7 +58,6 @@ const sim = {
   speed: 1,
   tickIntervalHandle: null,
   scheduler: null,
-  requestFreq: 0, // requests per minute
   requestSpawner: null, // interval handle
   _utilSamples: [], // { ts, totalUtilTime, servedCount } samples for sliding-window util
 
@@ -89,11 +88,6 @@ const sim = {
     this.running = true;
     const tickRate = process.env.NODE_ENV === "PRODUCTION" ? 1000 : 200;
     this.tickIntervalHandle = setInterval(() => this._tick(tickRate), tickRate); // rate limiting
-
-    // start spawner if freq set
-    if (this.requestFreq > 0) {
-      this.setRequestFrequency(this.requestFreq);
-    }
   },
 
   stop() {
@@ -296,152 +290,6 @@ const sim = {
     this.pendingRequests.push(r);
     return { ok: true, message: "Request queued", request: r };
   },
-
-  /**
-   * Set request spawn frequency (requests per minute).
-   * Spawns uniformly-random external requests while the sim is running.
-   * NOTE: This is not used currently and is commented out in frontend too.
-   */
-  setRequestFrequency(freqPerMinute = 0) {
-    // store setting
-    this.requestFreq = Number(freqPerMinute) || 0;
-
-    // clear any existing spawner
-    if (this.requestSpawner) {
-      clearInterval(this.requestSpawner);
-      this.requestSpawner = null;
-    }
-
-    // don't start spawner unless simulation is running and freq > 0
-    if (!this.running || this.requestFreq <= 0) return;
-
-    // compute ms interval between spawns (min 200ms)
-    const intervalMs = Math.max(200, Math.floor(60_000 / this.requestFreq));
-
-    // create spawner
-    this.requestSpawner = setInterval(() => {
-      try {
-        // Uniform random request: pick origin and destination distinct uniformly
-
-        let origin, destination;
-
-        // Morning rush bias (09:00–09:30) — ~70% lobby->upper, ~30% uniform random
-        if (this._isMorningRushWindow()) {
-          if (Math.random() < 0.7) {
-            // 70%: lobby origin -> choose an upward destination
-            origin = this.config.lobbyFloor || 1;
-            const minDest = Math.max(origin + 1, 1);
-            const maxDest = this.config.nFloors || 2;
-            if (maxDest >= minDest) {
-              destination =
-                Math.floor(Math.random() * (maxDest - minDest + 1)) + minDest;
-            } else {
-              // fallback to any other floor (defensive)
-              do {
-                destination =
-                  Math.floor(Math.random() * this.config.nFloors) + 1;
-              } while (destination === origin);
-            }
-          } else {
-            // 30%: uniform random origin/destination
-            origin = Math.floor(Math.random() * this.config.nFloors) + 1;
-            do {
-              destination = Math.floor(Math.random() * this.config.nFloors) + 1;
-            } while (destination === origin);
-          }
-        } else {
-          // Non-rush: uniform random origin/destination
-          origin = Math.floor(Math.random() * this.config.nFloors) + 1;
-          do {
-            destination = Math.floor(Math.random() * this.config.nFloors) + 1;
-          } while (destination === origin);
-        }
-
-        // push as an external manual request (will be scheduled by scheduler)
-        this.addManualRequest({
-          type: "external",
-          origin,
-          destination,
-        });
-      } catch (err) {
-        // keep spawner alive; log for debug
-        console.warn("[sim] requestSpawner error", err);
-      }
-    }, intervalMs);
-  },
-
-  // ---- All Morning Rush requests will be generated from lobby floor-------
-  // spawnScenario(name, _count = null) {
-  //   const count =
-  //     typeof _count === "number"
-  //       ? _count
-  //       : name === "morningRush"
-  //       ? 50
-  //       : name === "randomBurst"
-  //       ? 100
-  //       : 10;
-
-  //   const pickRandomFloorExcept = (excludeFloor) => {
-  //     if (this.config.nFloors <= 1) return excludeFloor; // degenerate
-  //     let f;
-  //     do {
-  //       f = Math.floor(Math.random() * this.config.nFloors) + 1;
-  //     } while (f === excludeFloor);
-  //     return f;
-  //   };
-
-  //   if (name === "morningRush") {
-  //     // Morning Rush: majority from lobby to upper floors.
-  //     for (let i = 0; i < count; i++) {
-  //       // For clarity: choose destination uniformly among floors != lobbyFloor,
-  //       // but prefer upper floors if possible by retrying until destination > lobbyFloor.
-  //       const origin = this.config.lobbyFloor || 1;
-  //       let destination = pickRandomFloorExcept(origin);
-
-  //       // If building has floors above the lobby, bias to upper floors (try up to a few times)
-  //       if (this.config.nFloors > origin) {
-  //         let tries = 0;
-  //         while (destination <= origin && tries < 6) {
-  //           destination =
-  //             Math.floor(Math.random() * (this.config.nFloors - origin)) +
-  //             origin +
-  //             1;
-  //           tries++;
-  //         }
-  //         // fallback already guaranteed to be != origin
-  //       }
-
-  //       // Use addManualRequest to ensure consistent id/timestamp/defaults
-  //       this.addManualRequest({
-  //         type: "external",
-  //         origin,
-  //         destination,
-  //         basePriority: 1,
-  //         priority: 1,
-  //       });
-  //     }
-  //   } else if (name === "randomBurst") {
-  //     for (let i = 0; i < count; i++) {
-  //       const origin = Math.floor(Math.random() * this.config.nFloors) + 1;
-  //       const destination = pickRandomFloorExcept(origin);
-
-  //       this.addManualRequest({
-  //         type: "external",
-  //         origin,
-  //         destination,
-  //         basePriority: 1,
-  //         priority: 1,
-  //       });
-  //     }
-  //   } else {
-  //     // generic named scenario fallback: spawn `count` uniformly random requests
-  //     for (let i = 0; i < count; i++) {
-  //       const origin = Math.floor(Math.random() * this.config.nFloors) + 1;
-  //       const destination = pickRandomFloorExcept(origin);
-  //       this.addManualRequest({ type: "external", origin, destination });
-  //     }
-  //   }
-  // },
 
   spawnScenario(name, _count = null) {
     const count =

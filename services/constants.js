@@ -249,7 +249,6 @@ const createHandlers = ({ sim }) => {
 
       try {
         sim.init(cfg);
-        if (cfg.requestFreq > 0) sim.setRequestFrequency(cfg.requestFreq);
         sim.broadcast();
         safeSend(ws, MSG.INFO(MSG.RECONFIG_SUCCESS));
       } catch (e) {
