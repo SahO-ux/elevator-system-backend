@@ -7,6 +7,7 @@ const OCCUPANCY_PENALTY_NEAR = 200; // penalty if near capacity
 const OCCUPANCY_PENALTY_FULL = 10000; // huge penalty if full
 const FAIRNESS_WEIGHT = 0.00008; // penalize elevator with high utilTime slightly
 
+// App default configuration
 const DefaultAppConfig = {
   nElevators: 3,
   nFloors: 12,
@@ -282,6 +283,19 @@ const createHandlers = ({ sim }) => {
   };
 };
 
+// helper to pick a destination != origin
+const pickRandomFloorExcept = (
+  excludeFloor,
+  floors = DefaultAppConfig.nFloors
+) => {
+  if (floors <= 1) return excludeFloor; // degenerate
+  let f;
+  do {
+    f = Math.floor(Math.random() * this.config.nFloors) + 1;
+  } while (f === excludeFloor);
+  return f;
+};
+
 export {
   DefaultAppConfig,
   updatePriorities,
@@ -291,4 +305,5 @@ export {
   scenarioMessage,
   safeSend,
   createHandlers,
+  pickRandomFloorExcept,
 };

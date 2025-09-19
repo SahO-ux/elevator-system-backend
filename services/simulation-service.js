@@ -7,6 +7,7 @@ import {
   createHandlers,
   DefaultAppConfig,
   MSG,
+  pickRandomFloorExcept,
   safeSend,
 } from "./constants.js";
 
@@ -452,15 +453,7 @@ const sim = {
         ? 100
         : 10;
 
-    // helper to pick a destination != origin
-    const pickRandomFloorExcept = (excludeFloor) => {
-      if (this.config.nFloors <= 1) return excludeFloor; // degenerate
-      let f;
-      do {
-        f = Math.floor(Math.random() * this.config.nFloors) + 1;
-      } while (f === excludeFloor);
-      return f;
-    };
+    const totalFloors = this.config.nFloors;
 
     if (name === "morningRush") {
       const lobbyRatio = 0.7;
@@ -472,11 +465,11 @@ const sim = {
         const origin = this.config.lobbyFloor || 1;
         // upward preference
         const minDest = Math.max(origin + 1, 1);
-        const maxDest = this.config.nFloors || 2;
+        const maxDest = totalFloors || 2;
         const destination =
           maxDest >= minDest
             ? Math.floor(Math.random() * (maxDest - minDest + 1)) + minDest
-            : pickRandomFloorExcept(origin);
+            : pickRandomFloorExcept(origin, totalFloors);
 
         this.addManualRequest({
           type: "external",
@@ -490,8 +483,8 @@ const sim = {
 
       // generate remaining uniformly-random requests
       for (let i = 0; i < numOthers; i++) {
-        const origin = Math.floor(Math.random() * this.config.nFloors) + 1;
-        const destination = pickRandomFloorExcept(origin);
+        const origin = Math.floor(Math.random() * totalFloors) + 1;
+        const destination = pickRandomFloorExcept(origin, totalFloors);
         this.addManualRequest({
           type: "external",
           origin,
@@ -502,8 +495,8 @@ const sim = {
       }
     } else if (name === "randomBurst") {
       for (let i = 0; i < count; i++) {
-        const origin = Math.floor(Math.random() * this.config.nFloors) + 1;
-        const destination = pickRandomFloorExcept(origin);
+        const origin = Math.floor(Math.random() * totalFloors) + 1;
+        const destination = pickRandomFloorExcept(origin, totalFloors);
 
         this.addManualRequest({
           type: "external",
@@ -516,8 +509,8 @@ const sim = {
     } else {
       // generic named scenario fallback: spawn `count` uniformly random requests
       for (let i = 0; i < count; i++) {
-        const origin = Math.floor(Math.random() * this.config.nFloors) + 1;
-        const destination = pickRandomFloorExcept(origin);
+        const origin = Math.floor(Math.random() * totalFloors) + 1;
+        const destination = pickRandomFloorExcept(origin, totalFloors);
         this.addManualRequest({ type: "external", origin, destination });
       }
     }
