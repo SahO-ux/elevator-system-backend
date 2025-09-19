@@ -85,8 +85,10 @@ export function initSimulationService(wss) {
                     isMorningRushScenario ? "Morning Rush" : "Random Burst"
                   } spawned successfully with ${
                     isMorningRushScenario ? "35" : "100"
-                  } randomly generated requests at lobby floor (Ground Floor) ${
-                    isMorningRushScenario ? " and 15 from other floors" : ""
+                  } randomly generated requests${
+                    isMorningRushScenario
+                      ? " at lobby floor (Ground Floor) and 15 from other floors"
+                      : ""
                   }.`,
                 })
               );
